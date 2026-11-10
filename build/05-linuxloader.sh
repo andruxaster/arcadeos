@@ -40,6 +40,8 @@ fi
 
 chroot_mount "$BCH"
 cp -L /etc/resolv.conf "$BCH/etc/resolv.conf" 2>/dev/null || true
+# upstream scripts call sudo, which wants to resolve the host name
+printf '127.0.0.1 localhost %s\n' "$(hostname)" > "$BCH/etc/hosts"
 bch() { chroot "$BCH" /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin \
           LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive \
           http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" \
@@ -56,7 +58,11 @@ if [ ! -f "$BCH/.arcadeos-ready" ]; then
 
   log "building 32-bit SDL3, SDL3_ttf, SDL3_image, FAudio (upstream build-deps.sh)"
   install -m 755 "$LLSRC/scripts/appimage/build-deps.sh" "$BCH/root/build-deps.sh"
-  bch bash -c 'cd /root && rm -rf build-deps && ./build-deps.sh'
+  # upstream script has no "set -e": force it, otherwise failures go unnoticed
+  bch bash -c 'cd /root && rm -rf build-deps build linuxloader.AppDir && bash -e ./build-deps.sh' \
+    || die "building SDL3/FAudio failed (see output above)"
+  bch bash -c 'ls /usr/lib/libSDL3.so* /usr/lib/*/libSDL3.so* /usr/local/lib/libSDL3.so* 2>/dev/null | grep -q .' \
+    || die "SDL3 was not installed in the build chroot"
   touch "$BCH/.arcadeos-ready"
 fi
 
@@ -69,14 +75,16 @@ tar -C "$LLSRC" --exclude=.git --exclude=build-linux --exclude=build-win32 -cf -
   | tar -C "$BCH/root/linuxloader" -xf -
 
 # version.h from the changelog, exactly like upstream CI does
-VER=$(awk '/^## \[/ { match($0, /\[([^]]+)\]/, a); print a[1]; exit }' "$LLSRC/docs/changelog")
+# (sed, not gawk-only awk: Debian's default awk is mawk)
+VER=$(sed -n 's/^## \[\([^]]*\)\].*/\1/p' "$LLSRC/docs/changelog" | head -n1)
 if [ -n "$VER" ]; then
   IFS=. read -r MA MI UP <<<"$VER"
   VH="$BCH/root/linuxloader/src/loader/version.h"
   sed -i "s/\(#define MAJOR_VERSION \).*/\1$MA/;s/\(#define MINOR_VERSION \).*/\1$MI/;s/\(#define UPDATE_VERSION \).*/\1${UP:-0}/" "$VH"
 fi
 
-bch bash -c 'cd /root/linuxloader && bash scripts/linux/make-linux.sh'
+bch bash -c 'cd /root/linuxloader && bash -e scripts/linux/make-linux.sh' \
+  || die "linuxloader build failed (see output above)"
 TGZ="$BCH/root/linuxloader/linuxloader-linux.tar.gz"
 [ -f "$TGZ" ] || die "linuxloader build did not produce linuxloader-linux.tar.gz"
 
