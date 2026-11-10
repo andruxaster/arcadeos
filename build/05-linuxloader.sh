@@ -22,7 +22,7 @@ REV=$(git -C "$LLSRC" describe --tags --always --dirty 2>/dev/null || echo unkno
 trap 'chroot_umount "$BCH"' EXIT
 
 # --- build chroot (reused between runs) -------------------------------------
-if [ ! -f "$BCH/.arcadeos-ready" ]; then
+if [ ! -f "$BCH/.arcadeos-bootstrapped" ]; then
   log "debootstrap $LL_BUILD_SUITE (build environment for linuxloader)"
   chroot_umount "$BCH" 2>/dev/null || true
   rm -rf "$BCH"; mkdir -p "$BCH"
@@ -42,6 +42,14 @@ chroot_mount "$BCH"
 cp -L /etc/resolv.conf "$BCH/etc/resolv.conf" 2>/dev/null || true
 # upstream scripts call sudo, which wants to resolve the host name
 printf '127.0.0.1 localhost %s\n' "$(hostname)" > "$BCH/etc/hosts"
+# optional extra CA (TLS-intercepting proxy) for git/apt inside the chroot
+if [ -n "${LL_BUILD_CA_FILE:-}" ]; then
+  [ -r "$LL_BUILD_CA_FILE" ] || die "LL_BUILD_CA_FILE not readable: $LL_BUILD_CA_FILE"
+  if [ -x "$BCH/usr/sbin/update-ca-certificates" ]; then
+    install -D -m 644 "$LL_BUILD_CA_FILE" "$BCH/usr/local/share/ca-certificates/arcadeos-extra.crt"
+    chroot "$BCH" update-ca-certificates >/dev/null
+  fi
+fi
 bch() { chroot "$BCH" /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin \
           LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive \
           http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" \
@@ -52,6 +60,10 @@ if [ ! -f "$BCH/.arcadeos-ready" ]; then
   bch dpkg --add-architecture i386
   bch apt-get update
   bch apt-get install -y --no-install-recommends sudo ca-certificates git cmake
+  if [ -n "${LL_BUILD_CA_FILE:-}" ]; then
+    install -D -m 644 "$LL_BUILD_CA_FILE" "$BCH/usr/local/share/ca-certificates/arcadeos-extra.crt"
+    chroot "$BCH" update-ca-certificates >/dev/null
+  fi
   # upstream script uses sudo + apt; run it as-is so we track their dependency list
   install -m 755 "$LLSRC/scripts/appimage/install-packages.sh" "$BCH/root/install-packages.sh"
   bch bash -c 'cd /root && ./install-packages.sh'
