@@ -1,0 +1,25 @@
+#!/bin/bash
+# X client started by the launcher via xinit: runs one game, then X exits.
+# usage: arcade-run <game-id> [play|test]
+. /opt/arcadeos/lib/common.sh
+
+id=${1:?game id}; mode=${2:-play}
+load_game "$id" || { echo "bad game: $id" >&2; exit 1; }
+
+xset s off s noblank -dpms 2>/dev/null || true
+
+case "$PLATFORM" in
+  lindbergh)
+    [ -x "$ARC_LOADER/linuxloader" ] || { echo "linuxloader missing" >&2; exit 1; }
+    args=()
+    [ -n "$ELF" ] && args+=("$ELF")
+    args+=(-g "$ELF_DIR")
+    [ "$mode" = test ] && args+=(-t)
+    cd "$ARC_LOADER" || exit 1
+    # shellcheck disable=SC2086  # ARGS is intentionally word-split
+    exec ./linuxloader "${args[@]}" $ARGS
+    ;;
+  *)
+    echo "platform '$PLATFORM' not supported in this build" >&2
+    exit 1 ;;
+esac

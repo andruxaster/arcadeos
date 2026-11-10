@@ -1,0 +1,6 @@
+#!/bin/sh
+# Reads the recovery key (one line) from stdin and opens a LUKS device.
+# Dashes/spaces are ignored and letters upper-cased, so "abcd-efgh..." works.
+# usage: arc-open-pass <device> <mapper-name>
+IFS= read -r pw
+printf '%s' "$pw" | tr -d ' -' | tr 'a-z' 'A-Z' | cryptsetup open --key-file=- "$1" "$2"

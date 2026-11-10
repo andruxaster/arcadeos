@@ -1,0 +1,21 @@
+#!/bin/sh
+# initramfs-tools hook: everything the ArcadeOS boot script needs.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+for b in cryptsetup veritysetup sha256sum; do
+  p=$(command -v "$b") || { echo "arcadeos hook: $b not found" >&2; exit 1; }
+  copy_exec "$p" /sbin
+done
+copy_file script /usr/local/sbin/hwid-key      /sbin/hwid-key
+copy_file script /usr/local/sbin/arc-open-pass /sbin/arc-open-pass
+
+manual_add_modules dm_mod dm_crypt dm_verity squashfs overlay ext4 efivarfs
+# ciphers/hashes requested at runtime by dm-crypt (aes-xts, sha256, argon2 uses userspace)
+copy_modules_dir kernel/crypto
+copy_modules_dir kernel/arch/x86/crypto
+copy_modules_dir kernel/lib/crypto
+copy_modules_dir kernel/drivers/md

@@ -1,0 +1,161 @@
+#!/bin/bash
+# ArcadeOS launcher - runs on tty1 instead of a shell.
+#   autoboot -> game, otherwise GAME SELECT / TEST MODE / SYSTEM menu.
+. /opt/arcadeos/lib/common.sh
+
+trap '' INT QUIT TSTP          # no Ctrl-C / Ctrl-Z escape to a shell
+export TERM=linux
+export NEWT_COLORS='
+root=white,black
+window=white,black
+border=yellow,black
+shadow=black,black
+title=yellow,black
+button=black,yellow
+actbutton=black,white
+compactbutton=white,black
+listbox=white,black
+actlistbox=black,yellow
+actsellistbox=black,yellow
+textbox=white,black
+acttextbox=black,yellow
+entry=white,black
+label=white,black
+checkbox=white,black
+actcheckbox=black,yellow
+emptyscale=,black
+fullscale=,yellow
+'
+
+VERSION=$(. /etc/arcadeos-release 2>/dev/null; echo "${ARCADEOS_VERSION:-?}")
+TITLE="ARCADE OS $VERSION"
+W=72; H=22
+
+wt() { whiptail --backtitle "$TITLE" "$@" 3>&1 1>&2 2>&3; }
+msg() { whiptail --backtitle "$TITLE" --title "${2:-INFO}" --msgbox "$1" 14 $W; }
+
+run_game() { # id [test]
+  local id=$1 mode=${2:-play}
+  load_game "$id" || { msg "Game '$id' is broken (game.conf)." ERROR; return; }
+  clear
+  xinit "$ARC_HOME/bin/arcade-run" "$id" "$mode" -- :0 "vt${XDG_VTNR:-1}" \
+        -nolisten tcp -keeptty > /tmp/arcade-x.log 2>&1
+  local rc=$?
+  clear
+  if [ $rc -ne 0 ] && [ "$mode" != test ]; then
+    whiptail --backtitle "$TITLE" --title "GAME EXITED ($rc)" \
+      --textbox /tmp/arcade-x.log 20 $W --scrolltext
+  fi
+}
+
+pick_game() { # title -> echoes id
+  list_games
+  if [ ${#GAME_IDS[@]} -eq 0 ]; then
+    msg "No games installed.\n\nSYSTEM > Import games from USB" "NO GAMES"; return 1
+  fi
+  local items=() i
+  for i in "${!GAME_IDS[@]}"; do items+=("${GAME_IDS[$i]}" "${GAME_NAMES[$i]}"); done
+  wt --title "$1" --menu "" $H $W 12 "${items[@]}"
+}
+
+autoboot() {
+  load_arc_conf
+  [ -n "$AUTOBOOT_GAME" ] || return 0
+  load_game "$AUTOBOOT_GAME" || return 0
+  clear
+  printf '\n\n   %s\n\n   Starting %s ...\n   Press any key for the menu.\n' "$TITLE" "$NAME"
+  if read -r -s -n1 -t "$AUTOBOOT_DELAY"; then return 0; fi
+  run_game "$AUTOBOOT_GAME"
+}
+
+edit_config() {
+  local id kind
+  id=$(pick_game "EDIT CONFIG") || return
+  load_game "$id" || return
+  kind=$(wt --title "EDIT CONFIG: $NAME" --menu "" 12 $W 3 \
+           config "linuxloader.ini (game settings)" \
+           controls "controls.ini (input mapping)") || return
+  local f="$ELF_DIR/linuxloader.ini"; [ "$kind" = controls ] && f="$ELF_DIR/controls.ini"
+  if [ ! -f "$f" ]; then
+    ( cd "$ARC_LOADER" && ./linuxloader --create "$kind" "$ELF_DIR" ) >/dev/null 2>&1
+  fi
+  [ -f "$f" ] || { msg "Could not create $f" ERROR; return; }
+  nano "$f"
+}
+
+set_autoboot() {
+  load_arc_conf
+  list_games
+  local items=(none "Show menu at boot") i sel
+  for i in "${!GAME_IDS[@]}"; do items+=("${GAME_IDS[$i]}" "${GAME_NAMES[$i]}"); done
+  sel=$(wt --title "AUTOBOOT" --default-item "${AUTOBOOT_GAME:-none}" \
+          --menu "Game that starts on power-on" $H $W 12 "${items[@]}") || return
+  [ "$sel" = none ] && sel=""
+  AUTOBOOT_GAME=$sel
+  save_arc_conf && msg "Autoboot: ${sel:-off}" SAVED
+}
+
+usb_import() {
+  whiptail --backtitle "$TITLE" --infobox "Searching USB drives..." 6 40
+  sudo -n "$ARC_HOME/bin/arcade-admin" usb-import > /tmp/import.log 2>&1
+  whiptail --backtitle "$TITLE" --title "IMPORT" --textbox /tmp/import.log 20 $W --scrolltext
+}
+
+sysinfo() {
+  {
+    echo "ArcadeOS   $VERSION"
+    echo "Kernel     $(uname -r)"
+    echo "GPU        $(nvidia-smi -L 2>/dev/null | head -n1 || lspci | grep -m1 VGA)"
+    echo "SecureBoot $(mokutil --sb-state 2>/dev/null | head -n1)"
+    echo "Root       $(sudo -n "$ARC_HOME/bin/arcade-admin" verity-status 2>/dev/null)"
+    echo "Data       $(df -h --output=used,size,pcent "$ARC_DATA" | tail -n1)"
+    echo
+    echo "HWID check:"
+    # values are not shown on screen: they are the key material
+    sudo -n "$ARC_HOME/bin/arcade-admin" hwid-check 2>/dev/null | awk '{printf "  %-15s %s\n", $1, $2}'
+  } > /tmp/sysinfo.txt
+  whiptail --backtitle "$TITLE" --title "SYSTEM INFO" --textbox /tmp/sysinfo.txt 20 $W
+}
+
+system_menu() {
+  local c
+  while true; do
+    c=$(wt --title "SYSTEM" --menu "" $H $W 10 \
+          autoboot "Set autoboot game" \
+          import   "Import games from USB" \
+          config   "Edit game config / controls" \
+          sound    "Sound test" \
+          info     "System info" \
+          back     "Back") || return
+    case "$c" in
+      autoboot) set_autoboot ;;
+      import)   usb_import ;;
+      config)   edit_config ;;
+      sound)    clear; speaker-test -c2 -t wav -l1 >/dev/null 2>&1 ;;
+      info)     sysinfo ;;
+      back)     return ;;
+    esac
+  done
+}
+
+main_menu() {
+  local c id
+  while true; do
+    c=$(wt --title "MAIN MENU" --menu "" $H $W 10 \
+          play     "GAME SELECT" \
+          test     "TEST MODE" \
+          system   "SYSTEM" \
+          reboot   "Reboot" \
+          poweroff "Power off") || continue
+    case "$c" in
+      play)     id=$(pick_game "GAME SELECT") && run_game "$id" ;;
+      test)     id=$(pick_game "TEST MODE")   && run_game "$id" test ;;
+      system)   system_menu ;;
+      reboot)   sudo -n "$ARC_HOME/bin/arcade-admin" reboot ;;
+      poweroff) sudo -n "$ARC_HOME/bin/arcade-admin" poweroff ;;
+    esac
+  done
+}
+
+autoboot
+main_menu

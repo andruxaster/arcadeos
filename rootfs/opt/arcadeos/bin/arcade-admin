@@ -1,0 +1,59 @@
+#!/bin/bash
+# Root helper for the launcher (allowed via /etc/sudoers.d/arcadeos).
+# Fixed whitelist of actions, takes no paths from the caller.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ARC_GAMES=/data/games
+ARC_UID=1000
+MNT=/run/arcadeos/usb
+
+usb_import() {
+  local found=0 disk part src id
+  mkdir -p "$MNT"
+  for disk in $(lsblk -dnrpo NAME,TRAN | awk '$2=="usb"{print $1}'); do
+    for part in $(lsblk -nrpo NAME,TYPE "$disk" | awk '$2=="part"||$2=="disk"{print $1}'); do
+      mountpoint -q "$MNT" && umount "$MNT"
+      mount -o ro,nosuid,nodev,noexec "$part" "$MNT" 2>/dev/null || continue
+      if [ -d "$MNT/arcadeos-games" ]; then
+        echo "Found arcadeos-games on $part"
+        for src in "$MNT"/arcadeos-games/*/; do
+          [ -f "$src/game.conf" ] || continue
+          id=$(basename "$src")
+          if ! [[ "$id" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]]; then
+            echo "  skip '$id': folder name must be a-z 0-9 _ -"; continue
+          fi
+          echo "  importing $id ..."
+          rm -rf "$ARC_GAMES/.import-$id"
+          if cp -r --no-preserve=ownership "$src" "$ARC_GAMES/.import-$id"; then
+            rm -rf "${ARC_GAMES:?}/${id:?}"
+            mv "$ARC_GAMES/.import-$id" "$ARC_GAMES/$id"
+            chown -R "$ARC_UID:$ARC_UID" "$ARC_GAMES/$id"
+            chmod -R u+rwX,go-w "$ARC_GAMES/$id"
+            found=$((found + 1))
+            echo "  ok"
+          else
+            rm -rf "$ARC_GAMES/.import-$id"; echo "  FAILED (disk full?)"
+          fi
+        done
+      fi
+      umount "$MNT"
+    done
+  done
+  sync
+  echo
+  if [ "$found" -eq 0 ]; then
+    echo "Nothing imported."
+    echo "Expected: <USB>/arcadeos-games/<game-id>/game.conf"
+  else
+    echo "$found game(s) imported. Free space: $(df -h --output=avail /data | tail -n1)"
+  fi
+}
+
+case "${1:-}" in
+  reboot)        systemctl reboot ;;
+  poweroff)      systemctl poweroff ;;
+  usb-import)    usb_import ;;
+  verity-status) veritysetup status arcroot-v 2>/dev/null | awk -F': *' '/status/{print "verity " $2}' ;;
+  hwid-check)    /usr/local/sbin/hwid-key --check | awk '{print $1, $2}' ;;
+  *) echo "usage: arcade-admin reboot|poweroff|usb-import|verity-status|hwid-check" >&2; exit 2 ;;
+esac

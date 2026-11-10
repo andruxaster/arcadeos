@@ -1,0 +1,9 @@
+# build outputs
+/work/
+/out/
+# NEVER commit signing keys
+/keys/
+# third-party binaries (non-commercial license, not redistributed)
+/vendor/linuxloader/
+__pycache__/
+*.pyc

@@ -1,0 +1,4 @@
+# NVIDIA userspace. The kernel module package comes from NVIDIA_KMOD in config.env.
+nvidia-driver
+nvidia-smi
+nvidia-driver-libs:i386

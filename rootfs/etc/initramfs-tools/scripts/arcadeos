@@ -1,0 +1,78 @@
+# shellcheck shell=sh
+# ArcadeOS boot method for initramfs-tools (selected by boot=arcadeos).
+#
+#   ARC_ROOT (LUKS2, HWID key) -> dm-verity (root hash from signed UKI cmdline)
+#       -> squashfs (ro) + tmpfs overlay  = /
+#   ARC_DATA (LUKS2, HWID key) -> ext4    = /data
+#
+# Sourced by /init; panic(), wait_for_udev, run_scripts, ${rootmnt} come from there.
+
+ARC_RUN=/run/arcadeos
+
+arc_param() { # arc_param name -> value of arcadeos.name= from cmdline
+  for x in $(cat /proc/cmdline); do
+    case "$x" in "arcadeos.$1="*) echo "${x#arcadeos.$1=}"; return 0 ;; esac
+  done
+  return 1
+}
+
+arc_wait_dev() {
+  i=0
+  while [ ! -b "$1" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+  [ -b "$1" ] || panic "ArcadeOS: device $1 not found"
+}
+
+arc_unlock() { # device mapper-name purpose
+  dev=$1; name=$2; purpose=$3
+  if /sbin/hwid-key "$purpose" | cryptsetup open --key-file=- "$dev" "$name" 2>/dev/null; then
+    return 0
+  fi
+  # Hardware changed (or different machine): ask for the recovery key.
+  tries=0
+  while [ "$tries" -lt 5 ]; do
+    tries=$((tries + 1))
+    if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
+      plymouth ask-for-password \
+        --prompt="Hardware changed. Recovery key ($purpose):" \
+        --command="/sbin/arc-open-pass $dev $name" \
+        --number-of-tries=1 && return 0
+    else
+      printf '\nHardware changed. Recovery key (%s): ' "$purpose"
+      stty -echo 2>/dev/null; IFS= read -r pw; stty echo 2>/dev/null; echo
+      printf '%s\n' "$pw" | /sbin/arc-open-pass "$dev" "$name" && return 0
+    fi
+  done
+  panic "ArcadeOS: unable to unlock $purpose volume"
+}
+
+mount_top()       { run_scripts /scripts/local-top; }
+mount_premount()  { run_scripts /scripts/local-premount; }
+mount_bottom()    { run_scripts /scripts/local-bottom; }
+
+mountroot() {
+  for m in dm_mod dm_crypt dm_verity squashfs overlay ext4; do modprobe -q "$m"; done
+  wait_for_udev 10
+
+  roothash=$(arc_param roothash) || panic "ArcadeOS: no root hash on cmdline"
+  hashoff=$(arc_param hashoffset) || panic "ArcadeOS: no hash offset on cmdline"
+
+  arc_wait_dev /dev/disk/by-partlabel/ARC_ROOT
+  arc_unlock   /dev/disk/by-partlabel/ARC_ROOT arcroot root
+
+  veritysetup open /dev/mapper/arcroot arcroot-v /dev/mapper/arcroot "$roothash" \
+      --hash-offset="$hashoff" || panic "ArcadeOS: root image failed verification"
+
+  mkdir -p "$ARC_RUN/ro" "$ARC_RUN/rw"
+  mount -t squashfs -o ro /dev/mapper/arcroot-v "$ARC_RUN/ro" || panic "ArcadeOS: squashfs mount failed"
+  mount -t tmpfs -o mode=0755,size=25% tmpfs "$ARC_RUN/rw"
+  mkdir -p "$ARC_RUN/rw/upper" "$ARC_RUN/rw/work"
+  mount -t overlay overlay \
+      -o "lowerdir=$ARC_RUN/ro,upperdir=$ARC_RUN/rw/upper,workdir=$ARC_RUN/rw/work" \
+      "${rootmnt}" || panic "ArcadeOS: overlay mount failed"
+
+  arc_wait_dev /dev/disk/by-partlabel/ARC_DATA
+  arc_unlock   /dev/disk/by-partlabel/ARC_DATA arcdata data
+  mkdir -p "${rootmnt}/data"
+  mount -t ext4 -o noatime,nodev,nosuid /dev/mapper/arcdata "${rootmnt}/data" \
+      || panic "ArcadeOS: /data mount failed"
+}

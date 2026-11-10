@@ -1,0 +1,49 @@
+#!/bin/sh
+# ArcadeOS hardware-bound key derivation.
+#   hwid-key root|data   -> prints 64-char hex key (no newline) for that volume
+#   hwid-key --check     -> prints the identifiers, exit 1 if they look generic
+# POSIX sh: runs in the busybox initramfs and in the installer.
+#
+# NOTE: this is binding, not secrecy. Anyone who can run code on this
+# board can recompute the key. Secure Boot + BIOS password are what stop that.
+
+SCHEME="arcadeos-hwid-v1"
+DMI=/sys/class/dmi/id
+FIELDS="product_uuid board_serial board_vendor board_name product_serial"
+
+field() { tr -d '\n' 2>/dev/null < "$DMI/$1"; }
+
+weak() {
+  case "$1" in
+    ""|0|None|none|Default*|"To be filled"*|"To Be Filled"*|"O.E.M."*|"System Serial Number"*|"Not Specified"*) return 0 ;;
+    00000000-0000-0000-0000-000000000000|FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF) return 0 ;;
+    03000200-0400-0500-0006-000700080009) return 0 ;;   # well-known placeholder UUID
+  esac
+  return 1
+}
+
+material() {
+  printf '%s|%s' "$SCHEME" "$1"
+  for f in $FIELDS; do printf '|%s=%s' "$f" "$(field "$f")"; done
+}
+
+case "${1:-}" in
+  root|data)
+    material "$1" | sha256sum | cut -d' ' -f1 | tr -d '\n'
+    ;;
+  --check)
+    strong=0
+    for f in $FIELDS; do
+      v=$(field "$f")
+      if weak "$v"; then s=weak; else s=ok; strong=$((strong + 1)); fi
+      printf '%-15s %-4s %s\n' "$f" "$s" "$v"
+    done
+    # product_uuid must be good and at least one more distinct field
+    if weak "$(field product_uuid)" || [ "$strong" -lt 2 ]; then
+      echo "VERDICT weak"; exit 1
+    fi
+    echo "VERDICT ok"
+    ;;
+  *)
+    echo "usage: hwid-key root|data|--check" >&2; exit 2 ;;
+esac

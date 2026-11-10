@@ -1,0 +1,15 @@
+#!/bin/sh
+# Runs inside the installer live chroot during lb build.
+set -e
+systemctl enable arcadeos-installer.service
+systemctl mask getty@tty1.service
+mkdir -p /etc/X11/xorg.conf.d
+cat > /etc/X11/xorg.conf.d/10-installer.conf <<'EOF'
+Section "ServerFlags"
+    Option "DontVTSwitch" "true"
+    Option "BlankTime"    "0"
+    Option "StandbyTime"  "0"
+    Option "SuspendTime"  "0"
+    Option "OffTime"      "0"
+EndSection
+EOF

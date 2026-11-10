@@ -1,0 +1,4 @@
+# ArcadeOS: tty1 goes straight into the launcher. There is no shell.
+if [ "$(tty)" = /dev/tty1 ]; then
+  exec /opt/arcadeos/bin/arcade-launcher
+fi

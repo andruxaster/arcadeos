@@ -1,0 +1,18 @@
+[Unit]
+Description=ArcadeOS installer UI
+After=systemd-user-sessions.service plymouth-quit-wait.service live-config.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+Environment=HOME=/root
+ExecStart=/usr/bin/xinit /opt/arcadeos-installer/installer.py -- :0 vt1 -nolisten tcp -keeptty
+StandardInput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

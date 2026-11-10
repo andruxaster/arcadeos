@@ -1,0 +1,2 @@
+# ArcadeOS: / and /data are mounted by the initramfs (boot=arcadeos).
+tmpfs  /tmp  tmpfs  nosuid,nodev,mode=1777  0 0

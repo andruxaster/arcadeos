@@ -1,0 +1,70 @@
+// ArcadeOS Plymouth theme: logo, pulsing dots, recovery-key prompt.
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+cx = Window.GetX() + Window.GetWidth() / 2;
+cy = Window.GetY() + Window.GetHeight() / 2;
+
+logo.image = Image("logo.png");
+scale = 1;
+if (logo.image.GetWidth() > Window.GetWidth() * 0.8)
+  scale = Window.GetWidth() * 0.8 / logo.image.GetWidth();
+logo.image = logo.image.Scale(logo.image.GetWidth() * scale, logo.image.GetHeight() * scale);
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(cx - logo.image.GetWidth() / 2);
+logo.sprite.SetY(cy - logo.image.GetHeight() / 2 - 40);
+
+NDOTS = 5;
+dot_img = Image.Text("●", 1, 0.78, 0.16, 1, "Sans 18");
+for (i = 0; i < NDOTS; i++) {
+  dots[i] = Sprite(dot_img);
+  dots[i].SetX(cx - (NDOTS * 30) / 2 + i * 30);
+  dots[i].SetY(cy + logo.image.GetHeight() / 2 + 20);
+}
+
+t = 0;
+fun refresh_cb() {
+  t++;
+  for (i = 0; i < NDOTS; i++) {
+    a = Math.Sin((t / 8) - i * 0.6);
+    if (a < 0) a = 0;
+    dots[i].SetOpacity(0.15 + 0.85 * a);
+  }
+}
+Plymouth.SetRefreshFunction(refresh_cb);
+
+// ---- recovery key prompt (hardware changed) ----
+prompt_sprite = Sprite();
+bullet_sprite = Sprite();
+fun password_cb(prompt, bullets) {
+  for (i = 0; i < NDOTS; i++) dots[i].SetOpacity(0);
+  p = Image.Text(prompt, 1, 1, 1, 1, "Sans 16");
+  prompt_sprite.SetImage(p);
+  prompt_sprite.SetOpacity(1);
+  prompt_sprite.SetX(cx - p.GetWidth() / 2);
+  prompt_sprite.SetY(cy + logo.image.GetHeight() / 2 + 20);
+  s = "";
+  for (i = 0; i < bullets; i++) s += "*";
+  if (s == "") s = "_";
+  b = Image.Text(s, 1, 0.78, 0.16, 1, "Sans 20");
+  bullet_sprite.SetImage(b);
+  bullet_sprite.SetOpacity(1);
+  bullet_sprite.SetX(cx - b.GetWidth() / 2);
+  bullet_sprite.SetY(cy + logo.image.GetHeight() / 2 + 60);
+}
+Plymouth.SetDisplayPasswordFunction(password_cb);
+
+fun normal_cb() {
+  prompt_sprite.SetOpacity(0);
+  bullet_sprite.SetOpacity(0);
+}
+Plymouth.SetDisplayNormalFunction(normal_cb);
+
+msg_sprite = Sprite();
+fun message_cb(text) {
+  m = Image.Text(text, 0.8, 0.8, 0.8, 1, "Sans 12");
+  msg_sprite.SetImage(m);
+  msg_sprite.SetX(cx - m.GetWidth() / 2);
+  msg_sprite.SetY(Window.GetY() + Window.GetHeight() - 60);
+}
+Plymouth.SetMessageFunction(message_cb);

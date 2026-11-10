@@ -1,0 +1,2 @@
+# The launcher (user arcade) may run only the whitelisted admin helper as root.
+arcade ALL=(root) NOPASSWD: /opt/arcadeos/bin/arcade-admin
