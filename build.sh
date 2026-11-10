@@ -1,17 +1,18 @@
 #!/bin/bash
 # ArcadeOS build: ./build.sh [stage...]
-#   stages: keys rootfs image boot installer   (default: all)
+#   stages: keys loader rootfs image boot installer   (default: all)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 declare -A STAGE=(
   [keys]=build/00-keys.sh
+  [loader]=build/05-linuxloader.sh
   [rootfs]=build/10-rootfs.sh
   [image]=build/20-image.sh
   [boot]=build/30-boot.sh
   [installer]=build/40-installer.sh
 )
-ORDER=(keys rootfs image boot installer)
+ORDER=(keys loader rootfs image boot installer)
 
 [ $# -eq 0 ] && set -- "${ORDER[@]}"
 for s in "$@"; do

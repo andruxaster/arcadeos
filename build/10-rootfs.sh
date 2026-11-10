@@ -4,8 +4,9 @@
 need_root
 need_cmd debootstrap
 
-LL="$(abspath "$LINUXLOADER_DIR")"
-[ -x "$LL/linuxloader" ] || die "linuxloader not found in $LL (unpack a release there, see README)"
+if [ -n "$LINUXLOADER_PREBUILT" ]; then LL="$(abspath "$LINUXLOADER_PREBUILT")"
+else LL="$WORK/linuxloader-dist"; fi
+[ -x "$LL/linuxloader" ] || die "linuxloader not found in $LL (run build/05-linuxloader.sh)"
 [ -f "$KEYS/MOK.key" ] || die "run build/00-keys.sh first"
 
 trap 'chroot_umount "$ROOTFS"' EXIT
@@ -69,6 +70,22 @@ log "installing linuxloader"
 rm -rf "$ROOTFS/opt/arcadeos/linuxloader"
 cp -a "$LL" "$ROOTFS/opt/arcadeos/linuxloader"
 chmod +x "$ROOTFS/opt/arcadeos/linuxloader/linuxloader"
+install -d "$ROOTFS/usr/share/doc/linuxloader"
+cp "$SRC_DIR/THIRD_PARTY.md" "$ROOTFS/usr/share/doc/linuxloader/"
+[ -f "$LL/LICENSE-NOTICE" ] && cp "$LL/LICENSE-NOTICE" "$ROOTFS/usr/share/doc/linuxloader/"
+
+# Debian names freeglut libglut.so.3.12 on some releases; the loader wants .so.3
+d="$ROOTFS/usr/lib/i386-linux-gnu"
+if [ ! -e "$d/libglut.so.3" ]; then
+  g=$(ls "$d"/libglut.so.3.* 2>/dev/null | head -n1)
+  [ -n "$g" ] && ln -s "$(basename "$g")" "$d/libglut.so.3"
+fi
+
+log "checking linuxloader libraries inside the target"
+missing=$(in_chroot bash -c 'cd /opt/arcadeos/linuxloader && for f in linuxloader ll-deps/*.so*; do
+            LD_LIBRARY_PATH=/opt/arcadeos/linuxloader/ll-deps ldd "$f" 2>/dev/null; done' \
+          | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
+[ -z "$missing" ] || warn "linuxloader: unresolved libraries in target: $missing (add the :i386 packages to packages/i386.list)"
 
 log "users and services"
 in_chroot useradd -u "$ARCADE_UID" -m -s /bin/bash \

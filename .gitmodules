@@ -1,0 +1,3 @@
+[submodule "vendor/linuxloader"]
+	path = vendor/linuxloader
+	url = https://github.com/lindbergh-loader/linuxloader.git

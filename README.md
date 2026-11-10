@@ -138,25 +138,41 @@ Plymouth спрашивает ключ восстановления.
 - **Debian 13 (trixie) amd64**: физический, ВМ или контейнер с `--privileged`
   (нужны `chroot`, `mount`, loop-устройства);
 - root-доступ;
-- ~30 ГБ свободного места;
-- интернет: зеркало Debian, GitHub (исходники shim), microsoft.com (сертификаты UEFI CA).
+- ~35 ГБ свободного места;
+- интернет: зеркало Debian, archive.ubuntu.com (окружение сборки linuxloader), GitHub
+  (shim, SDL3, FAudio), microsoft.com (сертификаты UEFI CA).
 
 ---
 
 ## 4. Подготовка хоста сборки
 
+### 4.1 Клонирование
+
+linuxloader подключён как **git submodule**, поэтому клонируй рекурсивно:
+
+```sh
+git clone --recursive https://github.com/andruxaster/arcadeos
+cd arcadeos
+
+# если уже склонировал без --recursive:
+git submodule update --init
+```
+
+### 4.2 Пакеты
+
 ```sh
 sudo apt update
 sudo apt install \
-  debootstrap squashfs-tools cryptsetup-bin \
-  sbsigntool efitools openssl uuid-runtime \
+  debootstrap ubuntu-keyring squashfs-tools cryptsetup-bin \
+  sbsigntool efitools openssl uuid-runtime git \
   live-build wget bzip2 build-essential dos2unix libelf-dev \
   ovmf qemu-system-x86 qemu-utils
 ```
 
 | Пакет | Зачем |
 |---|---|
-| `debootstrap` | сборка корневой ФС Debian |
+| `debootstrap` | сборка корневой ФС Debian и окружения сборки linuxloader |
+| `ubuntu-keyring` | проверка подписи архива Ubuntu (окружение сборки linuxloader) |
 | `squashfs-tools`, `cryptsetup-bin` | `mksquashfs`, `veritysetup` |
 | `sbsigntool` | `sbsign` / `sbverify`: подпись EFI-файлов |
 | `efitools` | `cert-to-efi-sig-list`, `sign-efi-sig-list`: переменные Secure Boot |
@@ -164,24 +180,35 @@ sudo apt install \
 | `live-build` | сборка ISO установщика |
 | `ovmf`, `qemu-*` | тестовая ВМ |
 
-### linuxloader
+### 4.3 linuxloader
 
-linuxloader **не входит** в репозиторий (лицензия CC BY-NC-SA, см. [раздел 19](#19-лицензии-и-правовое)).
-Положи его Linux-сборку в `vendor/linuxloader/`:
+linuxloader — submodule `vendor/linuxloader`, закреплённый на релизном теге
+(сейчас **v3.0.14**). Отдельно ничего скачивать не нужно: стадия `loader` соберёт его из
+исходников (см. [6.1](#61-стадии)). Лицензия CC BY-NC-SA 4.0, некоммерческое использование,
+подробности в [`THIRD_PARTY.md`](THIRD_PARTY.md) и [разделе 19](#19-лицензии-и-правовое).
+
+Почему сборка идёт в отдельном **Ubuntu 22.04**-chroot, а не в Debian:
+
+- так собирает сам upstream (их CI на `ubuntu-22.04`), поэтому результат совпадает с
+  официальным релизом;
+- в Debian trixie нет `libstdc++5:i386` и `libncurses5:i386`, а старые игры Lindbergh их
+  требуют. Из jammy они попадают в `ll-deps/` и в целевую систему ставить их не нужно.
+
+**Обновить linuxloader** до новой версии:
 
 ```sh
-# вариант 1: готовый релиз
-mkdir -p vendor/linuxloader
-tar -xf linuxloader-*.tar.* -C vendor/linuxloader --strip-components=1
-
-# вариант 2: из исходников
-git clone https://github.com/lindbergh-loader/linuxloader
-make -C linuxloader linux
-cp -a linuxloader/build-linux/. vendor/linuxloader/
+cd vendor/linuxloader
+git fetch --tags
+git checkout v3.0.15            # нужный тег
+cd ../..
+git add vendor/linuxloader
+git commit -m "linuxloader v3.0.15"
+sudo ./build.sh loader rootfs image boot installer
 ```
 
-В итоге должен существовать исполняемый файл `vendor/linuxloader/linuxloader` и, как правило,
-папка `vendor/linuxloader/ll-deps/` с 32-битными библиотеками.
+**Готовый бинарный релиз вместо сборки** (быстрее, но без проверки исходников): распакуй его
+в любую папку (должны быть `./linuxloader` и `ll-deps/`) и укажи её в `config.env`:
+`LINUXLOADER_PREBUILT="vendor/linuxloader-bin"`. Стадию `loader` тогда можно пропустить.
 
 ---
 
@@ -213,12 +240,19 @@ cp -a linuxloader/build-linux/. vendor/linuxloader/
 | `1` (по умолчанию) | Видеокарта показывает картинку с самого старта | firmware будет запускать всё, что подписано Microsoft 3rd-party CA (например, shim других дистрибутивов). **Обязательно** пароль на BIOS и запрет загрузки с USB |
 | `0` | Запускается только подписанное тобой | Риск чёрного экрана. Выход: сброс CMOS. Используй, только если у CPU есть iGPU и вывод BIOS переключён на него |
 
-### 5.3 Пути
+### 5.3 linuxloader
+
+| Параметр | По умолчанию | Описание |
+|---|---|---|
+| `LL_BUILD_SUITE` | `jammy` | Ubuntu для окружения сборки (как в upstream CI) |
+| `LL_BUILD_MIRROR` | `archive.ubuntu.com` | Зеркало Ubuntu |
+| `LINUXLOADER_PREBUILT` | пусто | Папка с готовым релизом. Если задана, сборка из submodule не нужна |
+
+### 5.4 Пути
 
 | Параметр | Описание |
 |---|---|
-| `LINUXLOADER_DIR` | где лежит linuxloader (`vendor/linuxloader`) |
-| `WORK_DIR` | промежуточные файлы (`work/`): rootfs, образ, исходники shim |
+| `WORK_DIR` | промежуточные файлы (`work/`): chroot сборки лоадера, rootfs, образ, исходники shim |
 | `OUT_DIR` | результаты (`out/`): payload и ISO |
 | `KEYS_DIR` | **ключи подписи** (`keys/`), см. [раздел 14](#14-ключи-подписи-хранение-и-бэкап) |
 
@@ -236,7 +270,8 @@ sudo ./build.sh image boot installer     # выборочно (например,
 | Стадия | Скрипт | Что делает | Результат |
 |---|---|---|---|
 | `keys` | `build/00-keys.sh` | Генерирует PK, KEK, db (RSA-2048, 20 лет) и MOK; собирает и подписывает `.auth` для записи в firmware; при `SB_MS_UEFI_CA=1` скачивает сертификаты Microsoft и добавляет их в db | `keys/` |
-| `rootfs` | `build/10-rootfs.sh` | `debootstrap` (minbase) + i386 multiarch; ядро, NVIDIA (модуль подписан MOK через DKMS), X, Plymouth, 32-битные библиотеки, linuxloader, оверлей `rootfs/`, пользователь `arcade`, отключение лишних сервисов. Приватный MOK-ключ **удаляется** из rootfs | `work/rootfs/` |
+| `loader` | `build/05-linuxloader.sh` | Ubuntu 22.04-chroot (переиспользуется между запусками), зависимости по upstream-скрипту `install-packages.sh`, 32-битные SDL3/SDL3_ttf/SDL3_image/FAudio по `build-deps.sh`, затем `make-linux.sh`. Добавляет SDL3 в `ll-deps/`, проверяет зависимости через `ldd`, пишет `LICENSE-NOTICE` с ревизией | `work/linuxloader-dist/` |
+| `rootfs` | `build/10-rootfs.sh` | `debootstrap` (minbase) + i386 multiarch; ядро, NVIDIA (модуль подписан MOK через DKMS), X, Plymouth, 32-битные библиотеки, linuxloader + атрибуция в `/usr/share/doc/linuxloader/`, проверка `ldd` внутри целевой системы, оверлей `rootfs/`, пользователь `arcade`, отключение лишних сервисов. Приватный MOK-ключ **удаляется** из rootfs | `work/rootfs/` |
 | `image` | `build/20-image.sh` | Собирает initramfs (проверяет, что внутри есть скрипт `arcadeos`), пакует корень в squashfs (zstd), считает хэш-дерево dm-verity и проверяет его | `work/root.img`, `work/root.env` (root hash, offset, размеры) |
 | `boot` | `build/30-boot.sh` | Собирает shim с твоим сертификатом; собирает UKI (`ukify`) с cmdline, где зашит root hash; подписывает shim, MokManager, UKI ключом db и проверяет подписи; складывает всё в payload с `SHA256SUMS` | `out/payload/` |
 | `installer` | `build/40-installer.sh` | Собирает live-ISO (live-build) с GUI-установщиком и payload внутри | `out/arcadeos-installer-<версия>.iso` |
@@ -248,7 +283,8 @@ sudo ./build.sh image boot installer     # выборочно (например,
 | Скрипты лаунчера, конфиги в `rootfs/`, список пакетов | `sudo ./build.sh rootfs image boot installer` |
 | Только `KERNEL_CMDLINE_EXTRA` | `sudo ./build.sh boot installer` |
 | Только GUI установщика | `sudo ./build.sh installer` |
-| Новая версия linuxloader | `sudo ./build.sh rootfs image boot installer` |
+| Новая версия linuxloader (тег submodule) | `sudo ./build.sh loader rootfs image boot installer` |
+| Пересоздать окружение сборки лоадера с нуля | `sudo rm -rf work/llbuild && sudo ./build.sh loader` |
 
 Стадию `keys` перезапускать **не нужно**: существующие ключи переиспользуются. Новые ключи
 появятся, только если удалить `keys/`, и тогда все установленные машины придётся переустанавливать.
@@ -651,6 +687,9 @@ cryptsetup luksDump /dev/disk/by-partlabel/ARC_ROOT
 
 | Ошибка | Решение |
 |---|---|
+| `submodule missing` | `git submodule update --init` |
+| Стадия `loader`: ошибка `apt` или сборки SDL3 | Upstream мог поменять `install-packages.sh`/`build-deps.sh`. Удали `work/llbuild` и запусти снова; если не помогло, попробуй предыдущий тег submodule |
+| `linuxloader: unresolved libraries in target: …` | Не хватает 32-битной библиотеки в целевой системе. Найди пакет (`apt-file search <lib>`) и добавь `<пакет>:i386` в `packages/i386.list` |
 | `package X not available, skipped` (i386) | Не критично, многие библиотеки есть в `ll-deps`. Исправь имя в `packages/i386.list` |
 | `nvidia.ko for … missing or unsigned` | DKMS не собрал модуль: проверь, что `linux-headers-amd64` совпадает с ядром; см. `work/rootfs/var/lib/dkms/nvidia/*/build/make.log` |
 | Ошибка сборки shim | Смени `SHIM_VERSION` на актуальный релиз [rhboot/shim](https://github.com/rhboot/shim/releases), проверь зависимости |
@@ -720,6 +759,7 @@ arcadeos/
 ├── build/
 │   ├── lib.sh                       общие функции (лог, chroot, пути)
 │   ├── 00-keys.sh                   ключи Secure Boot и MOK
+│   ├── 05-linuxloader.sh            сборка linuxloader из submodule
 │   ├── 10-rootfs.sh                 корневая ФС Debian
 │   ├── 20-image.sh                  initramfs, squashfs, dm-verity
 │   ├── 30-boot.sh                   shim, UKI, подписи, payload
@@ -754,10 +794,11 @@ arcadeos/
 │   └── live/                        конфигурация live-build
 ├── tools/qemu-test.sh               ВМ с Secure Boot
 ├── examples/game.conf
-└── vendor/README.txt                куда положить linuxloader
+├── vendor/linuxloader/              git submodule → lindbergh-loader/linuxloader
+└── THIRD_PARTY.md                   атрибуция и лицензии сторонних компонентов
 ```
 
-Не в репозитории (`.gitignore`): `keys/`, `work/`, `out/`, `vendor/linuxloader/`.
+Не в репозитории (`.gitignore`): `keys/`, `work/`, `out/`.
 
 ---
 
@@ -777,8 +818,14 @@ arcadeos/
 ## 19. Лицензии и правовое
 
 - **ArcadeOS** (этот репозиторий): некоммерческий экспериментальный проект.
-- **linuxloader** распространяется под **CC BY-NC-SA**, авторы запрещают коммерческое
-  использование без их согласия. Поэтому он не включён в репозиторий и в образ встраивается
-  только из твоей локальной копии. Не продавай сборки с ним.
+- **linuxloader** © Linux Loader Development Team, лицензия
+  [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Подключён как
+  submodule и собирается **без изменений**. Лицензия разрешает некоммерческое
+  распространение с указанием авторства, поэтому лоадер входит в собранный образ, а
+  атрибуция лежит в системе в `/usr/share/doc/linuxloader/`. Авторы **запрещают
+  коммерческое использование** без их согласия: игровые автоматы за деньги, подписки,
+  продажа сборок. Это ограничение распространяется и на образы ArcadeOS. Если меняешь код
+  лоадера, публикуй изменения под той же лицензией, а лучше присылай их upstream.
+  Подробности: [`THIRD_PARTY.md`](THIRD_PARTY.md).
 - **Игры** не входят ни в репозиторий, ни в образ. Используй только дампы, на которые у тебя есть права.
 - Драйвер NVIDIA, firmware и пакеты Debian — под своими лицензиями (non-free компоненты Debian).
