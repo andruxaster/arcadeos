@@ -112,6 +112,13 @@ while read -r f; do
 done < <(find "$BCH/usr/lib" "$BCH/usr/local/lib" \( -name 'libSDL3*.so*' \) 2>/dev/null)
 [ "$n" -gt 0 ] || die "SDL3 libraries not found in build chroot"
 
+# libncurses.so.5 (shipped by upstream) needs libtinfo.so.5, which newer
+# distributions (Debian trixie) no longer have
+for f in "$BCH"/lib/i386-linux-gnu/libtinfo.so.5* "$BCH"/usr/lib/i386-linux-gnu/libtinfo.so.5*; do
+  [ -e "$f" ] && cp -a "$f" "$DIST/ll-deps/"
+done
+[ -e "$DIST/ll-deps/libtinfo.so.5" ] || warn "libtinfo.so.5 not found; games needing ncurses5 may fail"
+
 # 32-bit check: is everything resolvable inside the build chroot?
 log "checking library dependencies"
 rm -rf "$BCH/tmp/lldist"; cp -a "$DIST" "$BCH/tmp/lldist"
